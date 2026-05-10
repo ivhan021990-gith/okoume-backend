@@ -1,0 +1,215 @@
+// Okoumé — Schéma de base de données
+// PostgreSQL via Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── UTILISATEURS ─────────────────────────────────────────────────
+model User {
+  id          String   @id @default(uuid())
+  phone       String   @unique  // +241XXXXXXXXX
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  lastSeen    DateTime @default(now())
+  isActive    Boolean  @default(true)
+  isBanned    Boolean  @default(false)
+  isVerified  Boolean  @default(false)   // selfie vérifié
+  subscription Subscription @default(FREE)
+
+  // Profil
+  profile     Profile?
+
+  // Relations
+  sentLikes     Like[]       @relation("SentLikes")
+  receivedLikes Like[]       @relation("ReceivedLikes")
+  matchesA      Match[]      @relation("MatchUserA")
+  matchesB      Match[]      @relation("MatchUserB")
+  messages      Message[]
+  reports       Report[]     @relation("ReporterUser")
+  reported      Report[]     @relation("ReportedUser")
+  otps          OTP[]
+  payments      Payment[]
+  blockedBy     Block[]      @relation("BlockedUser")
+  blocking      Block[]      @relation("BlockingUser")
+
+  @@map("users")
+}
+
+enum Subscription {
+  FREE
+  PLUS       // Okoumé+ — 5 000 FCFA/mois
+  PREMIUM    // Okoumé Premium — 10 000 FCFA/mois (hommes uniquement)
+}
+
+// ─── PROFIL ───────────────────────────────────────────────────────
+model Profile {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name      String
+  age       Int
+  gender    Gender
+  province  String
+  city      String
+  bio       String?  @db.VarChar(280)
+  interests String[] // tableau de centres d'intérêt
+  photos    String[] // URLs des photos (Cloudinary/S3)
+  isIncognito Boolean @default(false) // Okoumé Premium uniquement
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("profiles")
+}
+
+enum Gender {
+  HOMME
+  FEMME
+}
+
+// ─── OTP SMS ──────────────────────────────────────────────────────
+model OTP {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone     String
+  code      String   // Haché avec bcrypt
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("otps")
+}
+
+// ─── LIKES & MATCHING ─────────────────────────────────────────────
+model Like {
+  id         String   @id @default(uuid())
+  fromUserId String
+  toUserId   String
+  isSuper    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  fromUser   User     @relation("SentLikes",    fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser     User     @relation("ReceivedLikes", fields: [toUserId],   references: [id], onDelete: Cascade)
+
+  @@unique([fromUserId, toUserId])
+  @@map("likes")
+}
+
+model Match {
+  id        String    @id @default(uuid())
+  userAId   String
+  userBId   String
+  createdAt DateTime  @default(now())
+  expiresAt DateTime? // Expire après 7 jours sans message
+
+  userA     User      @relation("MatchUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB     User      @relation("MatchUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@unique([userAId, userBId])
+  @@map("matches")
+}
+
+// ─── MESSAGERIE ───────────────────────────────────────────────────
+model Message {
+  id        String      @id @default(uuid())
+  matchId   String
+  senderId  String
+  text      String      @db.VarChar(500)
+  type      MessageType @default(TEXT)
+  readAt    DateTime?
+  createdAt DateTime    @default(now())
+
+  match     Match       @relation(fields: [matchId],  references: [id], onDelete: Cascade)
+  sender    User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  AUDIO
+}
+
+// ─── PAIEMENTS ────────────────────────────────────────────────────
+model Payment {
+  id           String        @id @default(uuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id])
+  amount       Int           // En FCFA
+  subscription Subscription
+  provider     PayProvider
+  reference    String        @unique // Référence Mobile Money
+  status       PayStatus     @default(PENDING)
+  expiresAt    DateTime      // Date de fin d'abonnement
+  createdAt    DateTime      @default(now())
+
+  @@map("payments")
+}
+
+enum PayProvider {
+  AIRTEL_MONEY
+  MOOV_MONEY
+  CARD
+}
+
+enum PayStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+// ─── SIGNALEMENTS & BLOCAGES ──────────────────────────────────────
+model Report {
+  id          String       @id @default(uuid())
+  reporterId  String
+  reportedId  String
+  reason      ReportReason
+  details     String?
+  status      ReportStatus @default(PENDING)
+  createdAt   DateTime     @default(now())
+
+  reporter    User         @relation("ReporterUser", fields: [reporterId], references: [id])
+  reported    User         @relation("ReportedUser", fields: [reportedId], references: [id])
+
+  @@map("reports")
+}
+
+enum ReportReason {
+  FAKE_PROFILE
+  HARASSMENT
+  INAPPROPRIATE_CONTENT
+  SPAM
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWED
+  RESOLVED
+  DISMISSED
+}
+
+model Block {
+  id          String   @id @default(uuid())
+  blockerId   String
+  blockedId   String
+  createdAt   DateTime @default(now())
+
+  blocker     User     @relation("BlockingUser", fields: [blockerId], references: [id])
+  blocked     User     @relation("BlockedUser",  fields: [blockedId], references: [id])
+
+  @@unique([blockerId, blockedId])
+  @@map("blocks")
+}
