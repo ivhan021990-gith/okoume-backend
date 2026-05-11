@@ -1,15 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Okoumé — src/routes/payments.js (tout-en-un, remplace l'existant)
+// Okoumé — src/routes/payments.js
 // ─────────────────────────────────────────────────────────────────────────────
 
-const router       = require('express').Router();
+const router         = require('express').Router();
 const { v4: uuidv4 } = require('uuid');
-const axios        = require('axios');
+const axios          = require('axios');
 const { PrismaClient } = require('@prisma/client');
-const { authMiddleware } = require('../middleware/auth');
+const { authenticate: requireAuth } = require('../middleware/auth');
 
-const prisma   = new PrismaClient();
-const BASE_URL = 'https://gateway.singpay.ga/v1';
+const prisma    = new PrismaClient();
+const BASE_URL  = 'https://gateway.singpay.ga/v1';
 const TOKEN_URL = 'https://gateway.singpay.ga/oauth/token';
 
 let cachedToken = null;
@@ -20,7 +20,7 @@ const PLANS = {
   premium: { label: 'Okoumé Premium', amount: 10000 },
 };
 
-// ─── OAuth 2.0 Token ─────────────────────────────────────────────────────────
+// ─── OAuth 2.0 Token SingPay ─────────────────────────────────────────────────
 async function getToken() {
   if (cachedToken && tokenExpiry && Date.now() < tokenExpiry - 60000) return cachedToken;
   const params = new URLSearchParams();
@@ -45,7 +45,7 @@ function detecterOp(phone) {
 }
 
 // ─── POST /api/payments/initiate ─────────────────────────────────────────────
-router.post('/initiate', authMiddleware, async (req, res) => {
+router.post('/initiate', requireAuth, async (req, res) => {
   try {
     const { plan } = req.body;
     const userId   = req.user.id;
@@ -79,13 +79,7 @@ router.post('/initiate', authMiddleware, async (req, res) => {
     }, { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, timeout: 15000 });
 
     const nomOp = info.op === 'AIRTEL_MONEY' ? 'Airtel Money' : 'Moov Money';
-    return res.json({
-      reference,
-      operateur: info.op,
-      message:   `📱 Confirmez le paiement de ${planInfo.amount.toLocaleString()} FCFA sur votre ${nomOp}.`,
-      plan,
-      amount:    planInfo.amount,
-    });
+    return res.json({ reference, operateur: info.op, message: `📱 Confirmez le paiement de ${planInfo.amount.toLocaleString()} FCFA sur votre ${nomOp}.`, plan, amount: planInfo.amount });
 
   } catch (err) {
     console.error('[payments/initiate]', err.message);
@@ -93,15 +87,15 @@ router.post('/initiate', authMiddleware, async (req, res) => {
   }
 });
 
-// ─── POST /api/payments/webhook ──────────────────────────────────────────────
+// ─── POST /api/payments/webhook (pas de JWT — appelé par SingPay) ─────────────
 router.post('/webhook', async (req, res) => {
   try {
     console.log('[Webhook SingPay]', JSON.stringify(req.body));
     const reference = req.body?.reference || req.body?.transaction_id || req.body?.id;
     if (!reference) return res.status(400).json({ error: 'reference manquante' });
 
-    const token     = await getToken();
-    const { data }  = await axios.get(`${BASE_URL}/transaction/api/status/${reference}`, {
+    const token    = await getToken();
+    const { data } = await axios.get(`${BASE_URL}/transaction/api/status/${reference}`, {
       headers: { Authorization: `Bearer ${token}` }, timeout: 10000,
     });
     const paid = data?.status === 'SUCCESS' || data?.statut === 'SUCCESS';
@@ -121,7 +115,6 @@ router.post('/webhook', async (req, res) => {
 
     console.log(`✅ ${payment.userId} | ${payment.subscription} | ${payment.amount} FCFA`);
     return res.status(200).json({ received: true });
-
   } catch (err) {
     console.error('[payments/webhook]', err.message);
     return res.status(200).json({ received: true });
@@ -129,10 +122,11 @@ router.post('/webhook', async (req, res) => {
 });
 
 // ─── GET /api/payments/status/:reference ─────────────────────────────────────
-router.get('/status/:reference', authMiddleware, async (req, res) => {
+router.get('/status/:reference', requireAuth, async (req, res) => {
   try {
+    const userId  = req.user.id;
     const payment = await prisma.payment.findUnique({ where: { reference: req.params.reference } });
-    if (!payment || payment.userId !== req.user.id) return res.status(404).json({ error: 'Introuvable' });
+    if (!payment || payment.userId !== userId) return res.status(404).json({ error: 'Introuvable' });
     return res.json({ reference: payment.reference, status: payment.status, subscription: payment.subscription, amount: payment.amount, expiresAt: payment.expiresAt });
   } catch (err) {
     return res.status(500).json({ error: 'Erreur serveur' });
