@@ -46,7 +46,7 @@ app.use('/api/reports',  reportRoutes);
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    app:    'Okoumé API',
+    app:    'Itonda API',
     version:'1.0.0',
     time:   new Date().toISOString(),
   });
@@ -63,7 +63,7 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════╗
-║   🌿  Okoumé API — Démarré           ║
+║   🌿  Itonda API — Démarré           ║
 ║   Port    : ${PORT}                       ║
 ║   Env     : ${process.env.NODE_ENV || 'development'}               ║
 ╚═══════════════════════════════════════╝

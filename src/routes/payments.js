@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Okoumé — src/routes/payments.js
+// Itonda — src/routes/payments.js
 // ─────────────────────────────────────────────────────────────────────────────
 
 const router         = require('express').Router();
@@ -16,8 +16,8 @@ let cachedToken = null;
 let tokenExpiry = null;
 
 const PLANS = {
-  plus:    { label: 'Okoumé+',        amount: 5000  },
-  premium: { label: 'Okoumé Premium', amount: 10000 },
+  plus:    { label: 'Itonda+',        amount: 5000  },
+  premium: { label: 'Itonda Premium', amount: 10000 },
 };
 
 // ─── OAuth 2.0 Token SingPay ─────────────────────────────────────────────────
@@ -74,7 +74,7 @@ router.post('/initiate', requireAuth, async (req, res) => {
       montant:      planInfo.amount,
       numero,
       portefeuille: process.env.SINGPAY_WALLET_ID,
-      description:  `Abonnement ${planInfo.label} — Okoumé`,
+      description:  `Abonnement ${planInfo.label} — Itonda`,
       callback:     `${process.env.APP_URL}/api/payments/webhook`,
     }, { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, timeout: 15000 });
 
