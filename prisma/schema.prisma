@@ -213,3 +213,21 @@ model Block {
   @@unique([blockerId, blockedId])
   @@map("blocks")
 }
+// ─── ITONDA BUSINESS ─────────────────────────────────────────────
+model BusinessPartner {
+  id        String   @id @default(uuid())
+  nom       String
+  type      String
+  emoji     String   @default("🏪")
+  quartier  String
+  ville     String   @default("Libreville")
+  ambiance  String   @default("")
+  promo     String   @default("")
+  prix      String   @default("💰")
+  heures    String   @default("")
+  categorie String   @default("restaurant")
+  featured  Boolean  @default(false)
+  actif     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
