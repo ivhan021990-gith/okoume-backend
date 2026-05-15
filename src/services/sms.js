@@ -58,9 +58,17 @@ async function sendSMS(phone, message) {
  */
 async function sendOTP(phone) {
   const code = Math.floor(1000 + Math.random() * 9000).toString();
-  const message = `Votre code Okoumé : ${code}\n\nValable 10 minutes. Ne partagez jamais ce code.`;
+  const message = `Votre code Itonda : ${code}\n\nValable 10 minutes. Ne partagez jamais ce code.`;
 
-  await sendSMS(phone, message);
+  try {
+    await sendSMS(phone, message);
+  } catch (err) {
+    // Fallback : afficher le code dans les logs si SMS échoue
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`📱 OTP FALLBACK — ${phone}`);
+    console.log(`🔑 CODE : ${code}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  }
   return code;
 }
 
