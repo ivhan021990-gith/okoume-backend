@@ -13,6 +13,7 @@ const matchRoutes    = require('./routes/matches');
 const messageRoutes  = require('./routes/messages');
 const paymentRoutes  = require('./routes/payments');
 const reportRoutes   = require('./routes/reports');
+const businessRoutes = require('./routes/business');
 
 const { socketHandler } = require('./services/socket');
 const { errorHandler }  = require('./middleware/errorHandler');
@@ -41,6 +42,7 @@ app.use('/api/matches',  matchRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/reports',  reportRoutes);
+app.use('/api/business', businessRoutes);
 
 // ─── HEALTH CHECK ──────────────────────────────────────────────────
 app.get('/health', (req, res) => {
