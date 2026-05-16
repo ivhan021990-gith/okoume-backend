@@ -27,6 +27,9 @@ const io     = new Server(server, {
   },
 });
 
+// ─── TRUST PROXY (requis pour Render/Heroku) ──────────────────────
+app.set('trust proxy', 1);
+
 // ─── MIDDLEWARE ────────────────────────────────────────────────────
 app.use(helmet());
 app.use(cors({ origin: process.env.FRONTEND_URL || '*' }));
