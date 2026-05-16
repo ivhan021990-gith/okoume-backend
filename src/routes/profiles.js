@@ -129,5 +129,26 @@ router.patch('/incognito', authenticate, async (req, res) => {
   });
   res.json({ success: true, isIncognito: updated.isIncognito });
 });
+// GET /api/profiles/me/stats
+router.get('/me/stats', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
 
+    const [matchCount, likeCount] = await Promise.all([
+      prisma.match.count({
+        where: {
+          OR: [{ userAId: userId }, { userBId: userId }],
+        },
+      }),
+      prisma.like.count({
+        where: { likedId: userId },
+      }),
+    ]);
+
+    return res.json({ matches: matchCount, likes: likeCount });
+  } catch (err) {
+    console.error('[Stats] error:', err);
+    return res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
 module.exports = router;
