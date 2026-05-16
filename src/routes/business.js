@@ -7,10 +7,10 @@ const express    = require('express');
 const router     = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const prisma     = new PrismaClient();
-const { authenticateToken } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 
 // GET /api/business — Liste tous les partenaires actifs
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   try {
     const { categorie } = req.query;
 
@@ -35,7 +35,7 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // GET /api/business/:id — Détail d'un partenaire
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', authenticate, async (req, res) => {
   try {
     const partenaire = await prisma.businessPartner.findUnique({
       where: { id: req.params.id },
@@ -50,7 +50,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // POST /api/business — Ajouter un partenaire (admin uniquement)
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   try {
     const { nom, type, emoji, quartier, ville, ambiance, promo, prix, heures, categorie, featured } = req.body;
 
