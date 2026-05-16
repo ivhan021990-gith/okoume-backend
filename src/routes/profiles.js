@@ -137,11 +137,11 @@ router.get('/me/stats', authenticate, async (req, res) => {
     const [matchCount, likeCount] = await Promise.all([
       prisma.match.count({
         where: {
-          OR: [{ userAId: userId }, { userBId: userId }],
+          OR: [{ userId1: userId }, { userId2: userId }],
         },
       }),
       prisma.like.count({
-        where: { likedId: userId },
+        where: { toUserId: userId },
       }),
     ]);
 
