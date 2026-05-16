@@ -17,12 +17,12 @@ router.post('/',
   authenticate,
   [
     body('name').trim().isLength({ min: 2, max: 50 }),
-    body('age').isInt({ min: 18, max: 80 }),
-    body('gender').isIn(['HOMME', 'FEMME']),
-    body('province').isIn(PROVINCES),
-    body('city').trim().notEmpty(),
-    body('bio').optional().isLength({ max: 280 }),
-    body('interests').isArray({ min: 1, max: 5 }),
+body('age').isInt({ min: 18, max: 99 }),
+body('gender').isIn(['HOMME', 'FEMME']),
+body('province').trim().notEmpty(),
+body('city').trim().notEmpty(),
+body('bio').optional().isLength({ max: 500 }),
+body('interests').isArray({ min: 1 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
