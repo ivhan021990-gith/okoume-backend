@@ -63,6 +63,8 @@ model Profile {
   bio       String?  @db.VarChar(280)
   interests String[] // tableau de centres d'intérêt
   photos    String[] // URLs des photos (Cloudinary/S3)
+  objectif  String?  // mariage | relation | amitie | casual
+  lifestyle Json?    // { education, enfants, alcool, tabac, religion }
   isIncognito Boolean @default(false) // Okoumé Premium uniquement
 
   createdAt DateTime @default(now())

@@ -23,18 +23,21 @@ router.post('/',
     body('city').trim().notEmpty(),
     body('bio').optional().isLength({ max: 280 }),
     body('interests').isArray({ min: 1 }),
+    body('objectif').optional().isIn(['mariage', 'relation', 'amitie', 'casual']),
+    body('lifestyle').optional().isObject(),
+    body('photos').optional().isArray(),
   ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { name, age, gender, province, city, bio, interests } = req.body;
+    const { name, age, gender, province, city, bio, interests, objectif, lifestyle, photos } = req.body;
 
     try {
       const profile = await prisma.profile.upsert({
         where:  { userId: req.user.id },
-        create: { userId: req.user.id, name, age, gender, province, city, bio, interests },
-        update: { name, age, gender, province, city, bio, interests },
+        create: { userId: req.user.id, name, age, gender, province, city, bio, interests, objectif, lifestyle, photos: photos || [] },
+        update: { name, age, gender, province, city, bio, interests, objectif, lifestyle, photos: photos || [] },
       });
       res.json({ success: true, profile });
     } catch (err) {
