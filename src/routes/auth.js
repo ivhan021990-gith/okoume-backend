@@ -24,6 +24,7 @@ router.post('/send-otp',
   otpLimiter,
   [
     body('phone')
+      .customSanitizer(value => value ? value.replace(/^\+2410/, '+241') : value)
       .matches(/^\+241(06[0256]|07[4567])\d{6}$/)
       .withMessage('Numéro gabonais invalide (+241 Airtel ou Moov)'),
   ],
@@ -80,7 +81,8 @@ router.post('/send-otp',
 // POST /api/auth/verify-otp
 router.post('/verify-otp',
   [
-    body('phone').notEmpty(),
+    body('phone').notEmpty()
+      .customSanitizer(value => value ? value.replace(/^\+2410/, '+241') : value),
     body('code').isLength({ min: 4, max: 4 }).isNumeric(),
   ],
   async (req, res) => {
