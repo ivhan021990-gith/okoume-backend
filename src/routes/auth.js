@@ -25,7 +25,7 @@ router.post('/send-otp',
   [
     body('phone')
       .customSanitizer(value => value ? value.replace(/^\+2410/, '+241') : value)
-      .matches(/^\+241(06[0256]|07[4567])\d{6}$/)
+      .matches(/^\+241(6[0256]|7[4567])\d{6}$/)
       .withMessage('Numéro gabonais invalide (+241 Airtel ou Moov)'),
   ],
   async (req, res) => {
