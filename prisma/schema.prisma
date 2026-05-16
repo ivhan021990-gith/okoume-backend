@@ -26,10 +26,12 @@ model User {
   profile     Profile?
 
   // Relations
-  sentLikes     Like[]       @relation("SentLikes")
-  receivedLikes Like[]       @relation("ReceivedLikes")
-  matchesA      Match[]      @relation("MatchUserA")
-  matchesB      Match[]      @relation("MatchUserB")
+  sentLikes      Like[]       @relation("SentLikes")
+  receivedLikes  Like[]       @relation("ReceivedLikes")
+  sentPasses     Pass[]       @relation("SentPasses")
+  receivedPasses Pass[]       @relation("ReceivedPasses")
+  matchesA       Match[]      @relation("MatchUserA")
+  matchesB       Match[]      @relation("MatchUserB")
   messages      Message[]
   reports       Report[]     @relation("ReporterUser")
   reported      Report[]     @relation("ReportedUser")
@@ -102,6 +104,19 @@ model Like {
 
   @@unique([fromUserId, toUserId])
   @@map("likes")
+}
+
+model Pass {
+  id         String   @id @default(uuid())
+  fromUserId String
+  toUserId   String
+  createdAt  DateTime @default(now())
+
+  fromUser   User     @relation("SentPasses",    fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser     User     @relation("ReceivedPasses", fields: [toUserId],  references: [id], onDelete: Cascade)
+
+  @@unique([fromUserId, toUserId])
+  @@map("passes")
 }
 
 model Match {

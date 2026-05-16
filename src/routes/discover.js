@@ -1,6 +1,6 @@
 const express = require('express');
 const prisma  = require('../config/prisma');
-const { authenticate, requireSubscription } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -20,9 +20,13 @@ router.get('/', authenticate, async (req, res) => {
       limit  = 10,
     } = req.query;
 
-    // Récupérer les IDs déjà likés ou bloqués
-    const [alreadyLiked, blocked] = await Promise.all([
+    // Récupérer les IDs déjà likés, passés ou bloqués
+    const [alreadyLiked, alreadyPassed, blocked] = await Promise.all([
       prisma.like.findMany({
+        where:  { fromUserId: req.user.id },
+        select: { toUserId: true },
+      }),
+      prisma.pass.findMany({
         where:  { fromUserId: req.user.id },
         select: { toUserId: true },
       }),
@@ -35,19 +39,19 @@ router.get('/', authenticate, async (req, res) => {
     const excludeIds = [
       req.user.id,
       ...alreadyLiked.map((l) => l.toUserId),
+      ...alreadyPassed.map((p) => p.toUserId),
       ...blocked.map((b) => b.blockerId === req.user.id ? b.blockedId : b.blockerId),
     ];
 
     // Genre opposé par défaut
     const targetGender = gender || (myProfile.gender === 'HOMME' ? 'FEMME' : 'HOMME');
 
-    // Requête Prisma avec filtres
     const profiles = await prisma.profile.findMany({
       where: {
         userId:      { notIn: excludeIds },
         gender:      targetGender,
         age:         { gte: parseInt(minAge), lte: parseInt(maxAge) },
-        isIncognito: false, // Ne pas montrer les profils incognito
+        isIncognito: false,
         ...(province && { province }),
         user: { isActive: true, isBanned: false },
       },
@@ -63,7 +67,7 @@ router.get('/', authenticate, async (req, res) => {
       orderBy: { updatedAt: 'desc' },
     });
 
-    // Calculer le score de compatibilité
+    // Score de compatibilité
     const scored = profiles.map((p) => {
       const commonInterests = p.interests.filter((i) =>
         myProfile.interests.includes(i)
@@ -107,7 +111,7 @@ router.post('/like', authenticate, async (req, res) => {
   if (!toUserId) return res.status(400).json({ error: 'toUserId requis' });
 
   try {
-    // Vérifier la limite de likes gratuits (20/jour pour FREE)
+    // Limite de likes gratuits (20/jour pour FREE)
     if (req.user.subscription === 'FREE') {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -116,7 +120,7 @@ router.post('/like', authenticate, async (req, res) => {
       });
       if (likesToday >= 20) {
         return res.status(403).json({
-          error: 'Limite de 20 likes atteinte. Passez à Okoumé+ pour des likes illimités.',
+          error: 'Limite de 20 likes atteinte. Passez à Itonda+ pour des likes illimités.',
           upgradeRequired: true,
         });
       }
@@ -134,23 +138,21 @@ router.post('/like', authenticate, async (req, res) => {
       }
     }
 
-    // Créer le like
     await prisma.like.upsert({
       where:  { fromUserId_toUserId: { fromUserId: req.user.id, toUserId } },
       create: { fromUserId: req.user.id, toUserId, isSuper },
       update: { isSuper },
     });
 
-    // Vérifier s'il y a un match mutuel
+    // Vérifier si match mutuel
     const mutualLike = await prisma.like.findFirst({
       where: { fromUserId: toUserId, toUserId: req.user.id },
     });
 
     let match = null;
     if (mutualLike) {
-      // Créer le match (ordre alphabétique pour éviter les doublons)
       const [userAId, userBId] = [req.user.id, toUserId].sort();
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 jours
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
       match = await prisma.match.upsert({
         where:  { userAId_userBId: { userAId, userBId } },
@@ -175,9 +177,19 @@ router.post('/like', authenticate, async (req, res) => {
 // POST /api/discover/pass
 router.post('/pass', authenticate, async (req, res) => {
   const { toUserId } = req.body;
-  // On crée un "like" négatif fictif pour ne plus montrer ce profil
-  // On utilise la même table mais on pourrait aussi avoir une table "passes"
-  res.json({ success: true });
+  if (!toUserId) return res.status(400).json({ error: 'toUserId requis' });
+
+  try {
+    await prisma.pass.upsert({
+      where:  { fromUserId_toUserId: { fromUserId: req.user.id, toUserId } },
+      create: { fromUserId: req.user.id, toUserId },
+      update: {},
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[pass]', err);
+    res.status(500).json({ error: 'Erreur lors du pass' });
+  }
 });
 
 module.exports = router;

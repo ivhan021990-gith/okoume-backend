@@ -1,20 +1,14 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// Okoumé — src/controllers/paymentController.js
-// Adapté au schema Prisma existant (model Payment, enum PayProvider, PayStatus, Subscription)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const { v4: uuidv4 }   = require('uuid');
-const { PrismaClient } = require('@prisma/client');
+const { v4: uuidv4 } = require('uuid');
+const crypto         = require('crypto');
+const prisma         = require('../config/prisma');
 const {
   initierPaiement, verifierStatut, detecterOperateur, PLANS,
 } = require('../services/singpay');
 
-const prisma = new PrismaClient();
-
-// ─── POST /api/payments/initiate ─────────────────────────────────────────────
+// ─── POST /api/payments/initiate ─────────────────────────────────
 async function initierAbonnement(req, res) {
   try {
-    const { plan } = req.body;   // 'plus' ou 'premium'
+    const { plan } = req.body;
     const userId   = req.user.id;
 
     if (!PLANS[plan]) {
@@ -34,9 +28,7 @@ async function initierAbonnement(req, res) {
     const planInfo     = PLANS[plan];
     const reference    = `OKM-${uuidv4().slice(0, 8).toUpperCase()}`;
     const subscription = plan === 'premium' ? 'PREMIUM' : 'PLUS';
-
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30);
+    const expiresAt    = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
     await prisma.payment.create({
       data: {
@@ -55,7 +47,7 @@ async function initierAbonnement(req, res) {
       transactionId: reference,
       montant:       planInfo.amount,
       phone:         user.phone,
-      description:   `Abonnement ${planInfo.label} — Okoumé`,
+      description:   `Abonnement ${planInfo.label} — Itonda`,
     });
 
     const nomOp = operateurInfo.operateur === 'AIRTEL_MONEY' ? 'Airtel Money' : 'Moov Money';
@@ -63,7 +55,7 @@ async function initierAbonnement(req, res) {
     return res.json({
       reference,
       operateur: operateurInfo.operateur,
-      message:   `📱 Confirmez le paiement de ${planInfo.amount.toLocaleString()} FCFA sur votre ${nomOp}.`,
+      message:   `Confirmez le paiement de ${planInfo.amount.toLocaleString()} FCFA sur votre ${nomOp}.`,
       plan,
       amount:    planInfo.amount,
     });
@@ -74,14 +66,35 @@ async function initierAbonnement(req, res) {
   }
 }
 
-// ─── POST /api/payments/webhook ──────────────────────────────────────────────
+// ─── POST /api/payments/webhook ──────────────────────────────────
+// Appelé par SingPay sans JWT. On vérifie le statut directement
+// auprès de l'API SingPay pour éviter toute manipulation externe.
 async function webhookSingPay(req, res) {
   try {
+    // Vérification de signature HMAC si SingPay la fournit
+    const singpaySecret = process.env.SINGPAY_WEBHOOK_SECRET;
+    if (singpaySecret) {
+      const signature = req.headers['x-singpay-signature'] || req.headers['x-webhook-signature'];
+      if (!signature) {
+        console.warn('[Webhook] Signature manquante — requête rejetée');
+        return res.status(401).json({ error: 'Signature requise' });
+      }
+      const expected = crypto
+        .createHmac('sha256', singpaySecret)
+        .update(JSON.stringify(req.body))
+        .digest('hex');
+      if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+        console.warn('[Webhook] Signature invalide — requête rejetée');
+        return res.status(401).json({ error: 'Signature invalide' });
+      }
+    }
+
     console.log('[Webhook SingPay]', JSON.stringify(req.body));
 
     const reference = req.body?.reference || req.body?.transaction_id || req.body?.id;
     if (!reference) return res.status(400).json({ error: 'reference manquante' });
 
+    // Re-vérification du statut côté SingPay (source de vérité)
     const { paid } = await verifierStatut(reference);
 
     const payment = await prisma.payment.findUnique({ where: { reference } });
@@ -104,7 +117,7 @@ async function webhookSingPay(req, res) {
       }),
     ]);
 
-    console.log(`✅ Abonnement activé — User: ${payment.userId} | ${payment.subscription} | ${payment.amount} FCFA`);
+    console.log(`[Webhook] Abonnement activé — ${payment.userId} | ${payment.subscription} | ${payment.amount} FCFA`);
     return res.status(200).json({ received: true });
 
   } catch (err) {
@@ -113,7 +126,7 @@ async function webhookSingPay(req, res) {
   }
 }
 
-// ─── GET /api/payments/status/:reference ─────────────────────────────────────
+// ─── GET /api/payments/status/:reference ─────────────────────────
 async function statutPaiement(req, res) {
   try {
     const { reference } = req.params;

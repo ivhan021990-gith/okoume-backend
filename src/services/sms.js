@@ -26,7 +26,7 @@ async function sendSMS(phone, message) {
         username: process.env.AT_USERNAME,
         to:       phone,
         message,
-        from:     process.env.AT_SENDER_ID || 'OKOUME',
+        from:     process.env.AT_SENDER_ID || 'ITONDA',
       }),
       {
         headers: {

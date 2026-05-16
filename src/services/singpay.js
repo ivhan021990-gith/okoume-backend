@@ -94,10 +94,9 @@ async function verifierStatut(transactionId) {
   return { paid, data };
 }
 
-// Plans Okoumé
 const PLANS = {
-  plus:    { label: 'Okoumé+',        amount: 5000  },
-  premium: { label: 'Okoumé Premium', amount: 10000 },
+  plus:    { label: 'Itonda+',        amount: 5000  },
+  premium: { label: 'Itonda Premium', amount: 10000 },
 };
 
 module.exports = { initierPaiement, verifierStatut, detecterOperateur, PLANS };

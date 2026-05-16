@@ -58,4 +58,21 @@ function requireSubscription(level = 'PLUS') {
   };
 }
 
-module.exports = { authenticate, requireSubscription };
+/**
+ * Middleware — vérifie la clé secrète admin dans le header X-Admin-Secret.
+ * Doit être utilisé après `authenticate`.
+ */
+function requireAdmin(req, res, next) {
+  const adminSecret = process.env.ADMIN_SECRET;
+  if (!adminSecret) {
+    console.error('[Admin] ADMIN_SECRET non configuré');
+    return res.status(500).json({ error: 'Configuration admin manquante' });
+  }
+  const provided = req.headers['x-admin-secret'];
+  if (!provided || provided !== adminSecret) {
+    return res.status(403).json({ error: 'Accès admin refusé' });
+  }
+  next();
+}
+
+module.exports = { authenticate, requireSubscription, requireAdmin };

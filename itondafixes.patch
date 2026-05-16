@@ -1,0 +1,809 @@
+From a15a6e6093e9036168b917a15efc51ca0bf1b7f7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 16 May 2026 21:21:14 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20corriger=20tous=20les=20bugs=20et=20prob?=
+ =?UTF-8?q?l=C3=A8mes=20de=20s=C3=A9curit=C3=A9=20identifi=C3=A9s?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Bugs critiques :
+- profiles: déplacer GET /me/stats AVANT /:userId (risque de conflit de route)
+- profiles: corriger la validation bio (max 500 → 280, aligné avec le schéma)
+- profiles: ajouter la validation de province via PROVINCES[]
+- discover: POST /pass persisté en base (table Pass) — auparavant no-op total
+- discover: exclure les profils passés de la découverte
+
+Sécurité :
+- payments/webhook: vérification HMAC (X-SingPay-Signature) si SINGPAY_WEBHOOK_SECRET défini
+- business POST: accès admin uniquement via middleware requireAdmin (header X-Admin-Secret)
+- middleware/auth: ajout de requireAdmin
+
+Architecture :
+- payments: suppression de la duplication — routes.js délègue au controller
+- paymentController: utilise le singleton Prisma (config/prisma.js)
+- business: utilise le singleton Prisma
+- singpay: labels PLANS mis à jour (Okoumé → Itonda)
+- sms: AT_SENDER_ID par défaut corrigé (OKOUME → ITONDA)
+- matches: filtrage des matches expirés (expiresAt > now)
+
+Schéma :
+- Ajout du modèle Pass (fromUserId, toUserId, unique) avec migration requise
+- User: ajout des relations sentPasses / receivedPasses
+
+.env.example :
+- Ajout SINGPAY_* (CLIENT_ID, CLIENT_SECRET, WALLET_ID, WEBHOOK_SECRET)
+- Ajout APP_URL
+- Suppression des variables CinetPay (remplacé par SingPay)
+- Mise à jour AT_SENDER_ID → ITONDA
+
+https://claude.ai/code/session_01NCEhz5FojKBUwkZ87733Rg
+---
+ .env.example                         |  23 +++--
+ prisma/schema.prisma                 |  23 ++++-
+ src/controllers/paymentController.js |  51 ++++++----
+ src/middleware/auth.js               |  19 +++-
+ src/routes/business.js               |  62 ++++++++----
+ src/routes/discover.js               |  42 +++++---
+ src/routes/matches.js                |  14 ++-
+ src/routes/payments.js               | 140 ++-------------------------
+ src/routes/profiles.js               |  61 ++++++------
+ src/services/singpay.js              |   5 +-
+ src/services/sms.js                  |   2 +-
+ 11 files changed, 209 insertions(+), 233 deletions(-)
+
+diff --git a/.env.example b/.env.example
+index e3d2c5b..7f62c14 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,10 +1,11 @@
+ # ─── BASE DE DONNÉES ───────────────────────────────────────────────
+ # PostgreSQL (ex: Supabase, Railway, Render)
+-DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/okoume_db"
++DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/itonda_db"
+ 
+ # ─── SERVEUR ───────────────────────────────────────────────────────
+ PORT=3000
+ NODE_ENV=development
++APP_URL=https://votre-domaine.com
+ FRONTEND_URL=http://localhost:8081
+ 
+ # ─── JWT ───────────────────────────────────────────────────────────
+@@ -15,19 +16,21 @@ JWT_EXPIRES_IN=30d
+ # Créez un compte sur africastalking.com
+ AT_API_KEY=votre_api_key_africas_talking
+ AT_USERNAME=votre_username
+-AT_SENDER_ID=OKOUME       # ID expéditeur (max 11 caractères)
++AT_SENDER_ID=ITONDA        # ID expéditeur (max 11 caractères)
++
++# ─── PAIEMENT — SingPay (Mobile Money Gabon) ───────────────────────
++# Créez un compte sur singpay.ga
++SINGPAY_CLIENT_ID=votre_client_id_singpay
++SINGPAY_CLIENT_SECRET=votre_client_secret_singpay
++SINGPAY_WALLET_ID=votre_wallet_id_singpay
++# Secret HMAC pour vérifier les webhooks entrants de SingPay
++SINGPAY_WEBHOOK_SECRET=votre_secret_webhook_singpay
+ 
+ # ─── CLOUDINARY (stockage photos) ──────────────────────────────────
+ CLOUDINARY_CLOUD_NAME=votre_cloud_name
+ CLOUDINARY_API_KEY=votre_api_key
+ CLOUDINARY_API_SECRET=votre_api_secret
+ 
+-# ─── PAIEMENT — CinetPay (Mobile Money Gabon) ──────────────────────
+-# Créez un compte sur cinetpay.com
+-CINETPAY_API_KEY=votre_api_key_cinetpay
+-CINETPAY_SITE_ID=votre_site_id
+-CINETPAY_SECRET_KEY=votre_secret_key
+-CINETPAY_NOTIFY_URL=https://votre-domaine.com/api/payments/webhook
+-
+ # ─── ADMIN ─────────────────────────────────────────────────────────
+-ADMIN_SECRET=votre_secret_admin_pour_les_endpoints_proteges
++# Envoyé dans le header X-Admin-Secret pour les routes d'administration
++ADMIN_SECRET=votre_secret_admin_tres_long_et_securise
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index 0700abd..a047e94 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -26,10 +26,12 @@ model User {
+   profile     Profile?
+ 
+   // Relations
+-  sentLikes     Like[]       @relation("SentLikes")
+-  receivedLikes Like[]       @relation("ReceivedLikes")
+-  matchesA      Match[]      @relation("MatchUserA")
+-  matchesB      Match[]      @relation("MatchUserB")
++  sentLikes      Like[]       @relation("SentLikes")
++  receivedLikes  Like[]       @relation("ReceivedLikes")
++  sentPasses     Pass[]       @relation("SentPasses")
++  receivedPasses Pass[]       @relation("ReceivedPasses")
++  matchesA       Match[]      @relation("MatchUserA")
++  matchesB       Match[]      @relation("MatchUserB")
+   messages      Message[]
+   reports       Report[]     @relation("ReporterUser")
+   reported      Report[]     @relation("ReportedUser")
+@@ -104,6 +106,19 @@ model Like {
+   @@map("likes")
+ }
+ 
++model Pass {
++  id         String   @id @default(uuid())
++  fromUserId String
++  toUserId   String
++  createdAt  DateTime @default(now())
++
++  fromUser   User     @relation("SentPasses",    fields: [fromUserId], references: [id], onDelete: Cascade)
++  toUser     User     @relation("ReceivedPasses", fields: [toUserId],  references: [id], onDelete: Cascade)
++
++  @@unique([fromUserId, toUserId])
++  @@map("passes")
++}
++
+ model Match {
+   id        String    @id @default(uuid())
+   userAId   String
+diff --git a/src/controllers/paymentController.js b/src/controllers/paymentController.js
+index 244d5be..7561d22 100644
+--- a/src/controllers/paymentController.js
++++ b/src/controllers/paymentController.js
+@@ -1,20 +1,14 @@
+-// ─────────────────────────────────────────────────────────────────────────────
+-// Okoumé — src/controllers/paymentController.js
+-// Adapté au schema Prisma existant (model Payment, enum PayProvider, PayStatus, Subscription)
+-// ─────────────────────────────────────────────────────────────────────────────
+-
+-const { v4: uuidv4 }   = require('uuid');
+-const { PrismaClient } = require('@prisma/client');
++const { v4: uuidv4 } = require('uuid');
++const crypto         = require('crypto');
++const prisma         = require('../config/prisma');
+ const {
+   initierPaiement, verifierStatut, detecterOperateur, PLANS,
+ } = require('../services/singpay');
+ 
+-const prisma = new PrismaClient();
+-
+-// ─── POST /api/payments/initiate ─────────────────────────────────────────────
++// ─── POST /api/payments/initiate ─────────────────────────────────
+ async function initierAbonnement(req, res) {
+   try {
+-    const { plan } = req.body;   // 'plus' ou 'premium'
++    const { plan } = req.body;
+     const userId   = req.user.id;
+ 
+     if (!PLANS[plan]) {
+@@ -34,9 +28,7 @@ async function initierAbonnement(req, res) {
+     const planInfo     = PLANS[plan];
+     const reference    = `OKM-${uuidv4().slice(0, 8).toUpperCase()}`;
+     const subscription = plan === 'premium' ? 'PREMIUM' : 'PLUS';
+-
+-    const expiresAt = new Date();
+-    expiresAt.setDate(expiresAt.getDate() + 30);
++    const expiresAt    = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+ 
+     await prisma.payment.create({
+       data: {
+@@ -55,7 +47,7 @@ async function initierAbonnement(req, res) {
+       transactionId: reference,
+       montant:       planInfo.amount,
+       phone:         user.phone,
+-      description:   `Abonnement ${planInfo.label} — Okoumé`,
++      description:   `Abonnement ${planInfo.label} — Itonda`,
+     });
+ 
+     const nomOp = operateurInfo.operateur === 'AIRTEL_MONEY' ? 'Airtel Money' : 'Moov Money';
+@@ -63,7 +55,7 @@ async function initierAbonnement(req, res) {
+     return res.json({
+       reference,
+       operateur: operateurInfo.operateur,
+-      message:   `📱 Confirmez le paiement de ${planInfo.amount.toLocaleString()} FCFA sur votre ${nomOp}.`,
++      message:   `Confirmez le paiement de ${planInfo.amount.toLocaleString()} FCFA sur votre ${nomOp}.`,
+       plan,
+       amount:    planInfo.amount,
+     });
+@@ -74,14 +66,35 @@ async function initierAbonnement(req, res) {
+   }
+ }
+ 
+-// ─── POST /api/payments/webhook ──────────────────────────────────────────────
++// ─── POST /api/payments/webhook ──────────────────────────────────
++// Appelé par SingPay sans JWT. On vérifie le statut directement
++// auprès de l'API SingPay pour éviter toute manipulation externe.
+ async function webhookSingPay(req, res) {
+   try {
++    // Vérification de signature HMAC si SingPay la fournit
++    const singpaySecret = process.env.SINGPAY_WEBHOOK_SECRET;
++    if (singpaySecret) {
++      const signature = req.headers['x-singpay-signature'] || req.headers['x-webhook-signature'];
++      if (!signature) {
++        console.warn('[Webhook] Signature manquante — requête rejetée');
++        return res.status(401).json({ error: 'Signature requise' });
++      }
++      const expected = crypto
++        .createHmac('sha256', singpaySecret)
++        .update(JSON.stringify(req.body))
++        .digest('hex');
++      if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
++        console.warn('[Webhook] Signature invalide — requête rejetée');
++        return res.status(401).json({ error: 'Signature invalide' });
++      }
++    }
++
+     console.log('[Webhook SingPay]', JSON.stringify(req.body));
+ 
+     const reference = req.body?.reference || req.body?.transaction_id || req.body?.id;
+     if (!reference) return res.status(400).json({ error: 'reference manquante' });
+ 
++    // Re-vérification du statut côté SingPay (source de vérité)
+     const { paid } = await verifierStatut(reference);
+ 
+     const payment = await prisma.payment.findUnique({ where: { reference } });
+@@ -104,7 +117,7 @@ async function webhookSingPay(req, res) {
+       }),
+     ]);
+ 
+-    console.log(`✅ Abonnement activé — User: ${payment.userId} | ${payment.subscription} | ${payment.amount} FCFA`);
++    console.log(`[Webhook] Abonnement activé — ${payment.userId} | ${payment.subscription} | ${payment.amount} FCFA`);
+     return res.status(200).json({ received: true });
+ 
+   } catch (err) {
+@@ -113,7 +126,7 @@ async function webhookSingPay(req, res) {
+   }
+ }
+ 
+-// ─── GET /api/payments/status/:reference ─────────────────────────────────────
++// ─── GET /api/payments/status/:reference ─────────────────────────
+ async function statutPaiement(req, res) {
+   try {
+     const { reference } = req.params;
+diff --git a/src/middleware/auth.js b/src/middleware/auth.js
+index c97908f..9c662b2 100644
+--- a/src/middleware/auth.js
++++ b/src/middleware/auth.js
+@@ -58,4 +58,21 @@ function requireSubscription(level = 'PLUS') {
+   };
+ }
+ 
+-module.exports = { authenticate, requireSubscription };
++/**
++ * Middleware — vérifie la clé secrète admin dans le header X-Admin-Secret.
++ * Doit être utilisé après `authenticate`.
++ */
++function requireAdmin(req, res, next) {
++  const adminSecret = process.env.ADMIN_SECRET;
++  if (!adminSecret) {
++    console.error('[Admin] ADMIN_SECRET non configuré');
++    return res.status(500).json({ error: 'Configuration admin manquante' });
++  }
++  const provided = req.headers['x-admin-secret'];
++  if (!provided || provided !== adminSecret) {
++    return res.status(403).json({ error: 'Accès admin refusé' });
++  }
++  next();
++}
++
++module.exports = { authenticate, requireSubscription, requireAdmin };
+diff --git a/src/routes/business.js b/src/routes/business.js
+index a6e6c4d..613c5a0 100644
+--- a/src/routes/business.js
++++ b/src/routes/business.js
+@@ -1,13 +1,7 @@
+-// ─────────────────────────────────────────────────────────────────────────────
+-// Itonda — src/routes/business.js
+-// Partenaires Itonda Business (restaurants, bars, cafés)
+-// ─────────────────────────────────────────────────────────────────────────────
+-
+-const express    = require('express');
+-const router     = express.Router();
+-const { PrismaClient } = require('@prisma/client');
+-const prisma     = new PrismaClient();
+-const { authenticate } = require('../middleware/auth');
++const express  = require('express');
++const router   = express.Router();
++const prisma   = require('../config/prisma');
++const { authenticate, requireAdmin } = require('../middleware/auth');
+ 
+ // GET /api/business — Liste tous les partenaires actifs
+ router.get('/', authenticate, async (req, res) => {
+@@ -50,7 +44,7 @@ router.get('/:id', authenticate, async (req, res) => {
+ });
+ 
+ // POST /api/business — Ajouter un partenaire (admin uniquement)
+-router.post('/', authenticate, async (req, res) => {
++router.post('/', authenticate, requireAdmin, async (req, res) => {
+   try {
+     const { nom, type, emoji, quartier, ville, ambiance, promo, prix, heures, categorie, featured } = req.body;
+ 
+@@ -62,15 +56,15 @@ router.post('/', authenticate, async (req, res) => {
+       data: {
+         nom,
+         type,
+-        emoji:     emoji    || '🏪',
++        emoji:     emoji     || '🏪',
+         quartier,
+-        ville:     ville    || 'Libreville',
+-        ambiance:  ambiance || '',
+-        promo:     promo    || '',
+-        prix:      prix     || '💰',
+-        heures:    heures   || '',
+-        categorie: categorie|| 'restaurant',
+-        featured:  featured || false,
++        ville:     ville     || 'Libreville',
++        ambiance:  ambiance  || '',
++        promo:     promo     || '',
++        prix:      prix      || '💰',
++        heures:    heures    || '',
++        categorie: categorie || 'restaurant',
++        featured:  featured  || false,
+         actif:     true,
+       },
+     });
+@@ -82,4 +76,34 @@ router.post('/', authenticate, async (req, res) => {
+   }
+ });
+ 
++// PUT /api/business/:id — Modifier un partenaire (admin uniquement)
++router.put('/:id', authenticate, requireAdmin, async (req, res) => {
++  try {
++    const { nom, type, emoji, quartier, ville, ambiance, promo, prix, heures, categorie, featured, actif } = req.body;
++
++    const partenaire = await prisma.businessPartner.update({
++      where: { id: req.params.id },
++      data: {
++        ...(nom       !== undefined && { nom }),
++        ...(type      !== undefined && { type }),
++        ...(emoji     !== undefined && { emoji }),
++        ...(quartier  !== undefined && { quartier }),
++        ...(ville     !== undefined && { ville }),
++        ...(ambiance  !== undefined && { ambiance }),
++        ...(promo     !== undefined && { promo }),
++        ...(prix      !== undefined && { prix }),
++        ...(heures    !== undefined && { heures }),
++        ...(categorie !== undefined && { categorie }),
++        ...(featured  !== undefined && { featured }),
++        ...(actif     !== undefined && { actif }),
++      },
++    });
++
++    return res.json(partenaire);
++  } catch (err) {
++    console.error('[Business] PUT error:', err);
++    return res.status(500).json({ error: 'Erreur serveur' });
++  }
++});
++
+ module.exports = router;
+diff --git a/src/routes/discover.js b/src/routes/discover.js
+index 3eb9f0a..2c356fa 100644
+--- a/src/routes/discover.js
++++ b/src/routes/discover.js
+@@ -1,6 +1,6 @@
+ const express = require('express');
+ const prisma  = require('../config/prisma');
+-const { authenticate, requireSubscription } = require('../middleware/auth');
++const { authenticate } = require('../middleware/auth');
+ 
+ const router = express.Router();
+ 
+@@ -20,12 +20,16 @@ router.get('/', authenticate, async (req, res) => {
+       limit  = 10,
+     } = req.query;
+ 
+-    // Récupérer les IDs déjà likés ou bloqués
+-    const [alreadyLiked, blocked] = await Promise.all([
++    // Récupérer les IDs déjà likés, passés ou bloqués
++    const [alreadyLiked, alreadyPassed, blocked] = await Promise.all([
+       prisma.like.findMany({
+         where:  { fromUserId: req.user.id },
+         select: { toUserId: true },
+       }),
++      prisma.pass.findMany({
++        where:  { fromUserId: req.user.id },
++        select: { toUserId: true },
++      }),
+       prisma.block.findMany({
+         where:  { OR: [{ blockerId: req.user.id }, { blockedId: req.user.id }] },
+         select: { blockerId: true, blockedId: true },
+@@ -35,19 +39,19 @@ router.get('/', authenticate, async (req, res) => {
+     const excludeIds = [
+       req.user.id,
+       ...alreadyLiked.map((l) => l.toUserId),
++      ...alreadyPassed.map((p) => p.toUserId),
+       ...blocked.map((b) => b.blockerId === req.user.id ? b.blockedId : b.blockerId),
+     ];
+ 
+     // Genre opposé par défaut
+     const targetGender = gender || (myProfile.gender === 'HOMME' ? 'FEMME' : 'HOMME');
+ 
+-    // Requête Prisma avec filtres
+     const profiles = await prisma.profile.findMany({
+       where: {
+         userId:      { notIn: excludeIds },
+         gender:      targetGender,
+         age:         { gte: parseInt(minAge), lte: parseInt(maxAge) },
+-        isIncognito: false, // Ne pas montrer les profils incognito
++        isIncognito: false,
+         ...(province && { province }),
+         user: { isActive: true, isBanned: false },
+       },
+@@ -63,7 +67,7 @@ router.get('/', authenticate, async (req, res) => {
+       orderBy: { updatedAt: 'desc' },
+     });
+ 
+-    // Calculer le score de compatibilité
++    // Score de compatibilité
+     const scored = profiles.map((p) => {
+       const commonInterests = p.interests.filter((i) =>
+         myProfile.interests.includes(i)
+@@ -107,7 +111,7 @@ router.post('/like', authenticate, async (req, res) => {
+   if (!toUserId) return res.status(400).json({ error: 'toUserId requis' });
+ 
+   try {
+-    // Vérifier la limite de likes gratuits (20/jour pour FREE)
++    // Limite de likes gratuits (20/jour pour FREE)
+     if (req.user.subscription === 'FREE') {
+       const today = new Date();
+       today.setHours(0, 0, 0, 0);
+@@ -116,7 +120,7 @@ router.post('/like', authenticate, async (req, res) => {
+       });
+       if (likesToday >= 20) {
+         return res.status(403).json({
+-          error: 'Limite de 20 likes atteinte. Passez à Okoumé+ pour des likes illimités.',
++          error: 'Limite de 20 likes atteinte. Passez à Itonda+ pour des likes illimités.',
+           upgradeRequired: true,
+         });
+       }
+@@ -134,23 +138,21 @@ router.post('/like', authenticate, async (req, res) => {
+       }
+     }
+ 
+-    // Créer le like
+     await prisma.like.upsert({
+       where:  { fromUserId_toUserId: { fromUserId: req.user.id, toUserId } },
+       create: { fromUserId: req.user.id, toUserId, isSuper },
+       update: { isSuper },
+     });
+ 
+-    // Vérifier s'il y a un match mutuel
++    // Vérifier si match mutuel
+     const mutualLike = await prisma.like.findFirst({
+       where: { fromUserId: toUserId, toUserId: req.user.id },
+     });
+ 
+     let match = null;
+     if (mutualLike) {
+-      // Créer le match (ordre alphabétique pour éviter les doublons)
+       const [userAId, userBId] = [req.user.id, toUserId].sort();
+-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 jours
++      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+ 
+       match = await prisma.match.upsert({
+         where:  { userAId_userBId: { userAId, userBId } },
+@@ -175,9 +177,19 @@ router.post('/like', authenticate, async (req, res) => {
+ // POST /api/discover/pass
+ router.post('/pass', authenticate, async (req, res) => {
+   const { toUserId } = req.body;
+-  // On crée un "like" négatif fictif pour ne plus montrer ce profil
+-  // On utilise la même table mais on pourrait aussi avoir une table "passes"
+-  res.json({ success: true });
++  if (!toUserId) return res.status(400).json({ error: 'toUserId requis' });
++
++  try {
++    await prisma.pass.upsert({
++      where:  { fromUserId_toUserId: { fromUserId: req.user.id, toUserId } },
++      create: { fromUserId: req.user.id, toUserId },
++      update: {},
++    });
++    res.json({ success: true });
++  } catch (err) {
++    console.error('[pass]', err);
++    res.status(500).json({ error: 'Erreur lors du pass' });
++  }
+ });
+ 
+ module.exports = router;
+diff --git a/src/routes/matches.js b/src/routes/matches.js
+index 0f3d9a2..99da6a4 100644
+--- a/src/routes/matches.js
++++ b/src/routes/matches.js
+@@ -7,9 +7,21 @@ const router = express.Router();
+ // ─── MES MATCHES ──────────────────────────────────────────────────
+ // GET /api/matches
+ router.get('/', authenticate, async (req, res) => {
++  const now = new Date();
+   const matches = await prisma.match.findMany({
+     where: {
+-      OR: [{ userAId: req.user.id }, { userBId: req.user.id }],
++      AND: [
++        {
++          OR: [{ userAId: req.user.id }, { userBId: req.user.id }],
++        },
++        {
++          // Inclure seulement les matches non expirés (expiresAt null = permanent)
++          OR: [
++            { expiresAt: null },
++            { expiresAt: { gt: now } },
++          ],
++        },
++      ],
+     },
+     include: {
+       userA: { include: { profile: true } },
+diff --git a/src/routes/payments.js b/src/routes/payments.js
+index 9c134e0..06629d7 100644
+--- a/src/routes/payments.js
++++ b/src/routes/payments.js
+@@ -1,136 +1,14 @@
+-// ─────────────────────────────────────────────────────────────────────────────
+-// Itonda — src/routes/payments.js
+-// ─────────────────────────────────────────────────────────────────────────────
++const router = require('express').Router();
++const { authenticate } = require('../middleware/auth');
++const { initierAbonnement, webhookSingPay, statutPaiement } = require('../controllers/paymentController');
+ 
+-const router         = require('express').Router();
+-const { v4: uuidv4 } = require('uuid');
+-const axios          = require('axios');
+-const { PrismaClient } = require('@prisma/client');
+-const { authenticate: requireAuth } = require('../middleware/auth');
++// ─── POST /api/payments/initiate ─────────────────────────────────
++router.post('/initiate', authenticate, initierAbonnement);
+ 
+-const prisma    = new PrismaClient();
+-const BASE_URL  = 'https://gateway.singpay.ga/v1';
+-const TOKEN_URL = 'https://gateway.singpay.ga/oauth/token';
++// ─── POST /api/payments/webhook (appelé par SingPay, sans JWT) ───
++router.post('/webhook', webhookSingPay);
+ 
+-let cachedToken = null;
+-let tokenExpiry = null;
+-
+-const PLANS = {
+-  plus:    { label: 'Itonda+',        amount: 5000  },
+-  premium: { label: 'Itonda Premium', amount: 10000 },
+-};
+-
+-// ─── OAuth 2.0 Token SingPay ─────────────────────────────────────────────────
+-async function getToken() {
+-  if (cachedToken && tokenExpiry && Date.now() < tokenExpiry - 60000) return cachedToken;
+-  const params = new URLSearchParams();
+-  params.append('grant_type',    'client_credentials');
+-  params.append('client_id',     process.env.SINGPAY_CLIENT_ID);
+-  params.append('client_secret', process.env.SINGPAY_CLIENT_SECRET);
+-  const { data } = await axios.post(TOKEN_URL, params, {
+-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+-    timeout: 10000,
+-  });
+-  cachedToken = data.access_token;
+-  tokenExpiry = Date.now() + (data.expires_in * 1000);
+-  return cachedToken;
+-}
+-
+-// ─── Détection opérateur ─────────────────────────────────────────────────────
+-function detecterOp(phone) {
+-  const n = phone.replace(/\D/g, '').replace(/^241/, '');
+-  if (n.startsWith('07') || n.startsWith('7')) return { op: 'AIRTEL_MONEY', route: '/74/paiement' };
+-  if (n.startsWith('06') || n.startsWith('6')) return { op: 'MOOV_MONEY',   route: '/62/paiement' };
+-  return null;
+-}
+-
+-// ─── POST /api/payments/initiate ─────────────────────────────────────────────
+-router.post('/initiate', requireAuth, async (req, res) => {
+-  try {
+-    const { plan } = req.body;
+-    const userId   = req.user.id;
+-
+-    if (!PLANS[plan]) return res.status(400).json({ error: 'Plan invalide : plus ou premium' });
+-
+-    const user = await prisma.user.findUnique({ where: { id: userId } });
+-    if (!user) return res.status(404).json({ error: 'Utilisateur introuvable' });
+-
+-    const info = detecterOp(user.phone);
+-    if (!info) return res.status(400).json({ error: 'Numéro invalide (Airtel 07x ou Moov 06x)' });
+-
+-    const planInfo     = PLANS[plan];
+-    const reference    = `OKM-${uuidv4().slice(0, 8).toUpperCase()}`;
+-    const subscription = plan === 'premium' ? 'PREMIUM' : 'PLUS';
+-    const expiresAt    = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+-    const numero       = user.phone.replace(/\D/g, '').replace(/^241/, '');
+-
+-    await prisma.payment.create({
+-      data: { id: uuidv4(), userId, amount: planInfo.amount, subscription, provider: info.op, reference, status: 'PENDING', expiresAt },
+-    });
+-
+-    const token = await getToken();
+-    await axios.post(`${BASE_URL}${info.route}`, {
+-      reference,
+-      montant:      planInfo.amount,
+-      numero,
+-      portefeuille: process.env.SINGPAY_WALLET_ID,
+-      description:  `Abonnement ${planInfo.label} — Itonda`,
+-      callback:     `${process.env.APP_URL}/api/payments/webhook`,
+-    }, { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, timeout: 15000 });
+-
+-    const nomOp = info.op === 'AIRTEL_MONEY' ? 'Airtel Money' : 'Moov Money';
+-    return res.json({ reference, operateur: info.op, message: `📱 Confirmez le paiement de ${planInfo.amount.toLocaleString()} FCFA sur votre ${nomOp}.`, plan, amount: planInfo.amount });
+-
+-  } catch (err) {
+-    console.error('[payments/initiate]', err.message);
+-    return res.status(500).json({ error: err.message || 'Erreur paiement' });
+-  }
+-});
+-
+-// ─── POST /api/payments/webhook (pas de JWT — appelé par SingPay) ─────────────
+-router.post('/webhook', async (req, res) => {
+-  try {
+-    console.log('[Webhook SingPay]', JSON.stringify(req.body));
+-    const reference = req.body?.reference || req.body?.transaction_id || req.body?.id;
+-    if (!reference) return res.status(400).json({ error: 'reference manquante' });
+-
+-    const token    = await getToken();
+-    const { data } = await axios.get(`${BASE_URL}/transaction/api/status/${reference}`, {
+-      headers: { Authorization: `Bearer ${token}` }, timeout: 10000,
+-    });
+-    const paid = data?.status === 'SUCCESS' || data?.statut === 'SUCCESS';
+-
+-    const payment = await prisma.payment.findUnique({ where: { reference } });
+-    if (!payment || payment.status === 'SUCCESS') return res.status(200).json({ received: true });
+-
+-    if (!paid) {
+-      await prisma.payment.update({ where: { reference }, data: { status: 'FAILED' } });
+-      return res.status(200).json({ received: true });
+-    }
+-
+-    await prisma.$transaction([
+-      prisma.payment.update({ where: { reference }, data: { status: 'SUCCESS' } }),
+-      prisma.user.update({ where: { id: payment.userId }, data: { subscription: payment.subscription } }),
+-    ]);
+-
+-    console.log(`✅ ${payment.userId} | ${payment.subscription} | ${payment.amount} FCFA`);
+-    return res.status(200).json({ received: true });
+-  } catch (err) {
+-    console.error('[payments/webhook]', err.message);
+-    return res.status(200).json({ received: true });
+-  }
+-});
+-
+-// ─── GET /api/payments/status/:reference ─────────────────────────────────────
+-router.get('/status/:reference', requireAuth, async (req, res) => {
+-  try {
+-    const userId  = req.user.id;
+-    const payment = await prisma.payment.findUnique({ where: { reference: req.params.reference } });
+-    if (!payment || payment.userId !== userId) return res.status(404).json({ error: 'Introuvable' });
+-    return res.json({ reference: payment.reference, status: payment.status, subscription: payment.subscription, amount: payment.amount, expiresAt: payment.expiresAt });
+-  } catch (err) {
+-    return res.status(500).json({ error: 'Erreur serveur' });
+-  }
+-});
++// ─── GET /api/payments/status/:reference ─────────────────────────
++router.get('/status/:reference', authenticate, statutPaiement);
+ 
+ module.exports = router;
+diff --git a/src/routes/profiles.js b/src/routes/profiles.js
+index afdaa53..5dde581 100644
+--- a/src/routes/profiles.js
++++ b/src/routes/profiles.js
+@@ -17,12 +17,12 @@ router.post('/',
+   authenticate,
+   [
+     body('name').trim().isLength({ min: 2, max: 50 }),
+-body('age').isInt({ min: 18, max: 99 }),
+-body('gender').isIn(['HOMME', 'FEMME']),
+-body('province').trim().notEmpty(),
+-body('city').trim().notEmpty(),
+-body('bio').optional().isLength({ max: 500 }),
+-body('interests').isArray({ min: 1 }),
++    body('age').isInt({ min: 18, max: 99 }),
++    body('gender').isIn(['HOMME', 'FEMME']),
++    body('province').trim().isIn(PROVINCES).withMessage('Province gabonaise invalide'),
++    body('city').trim().notEmpty(),
++    body('bio').optional().isLength({ max: 280 }),
++    body('interests').isArray({ min: 1 }),
+   ],
+   async (req, res) => {
+     const errors = validationResult(req);
+@@ -52,11 +52,35 @@ router.get('/me', authenticate, async (req, res) => {
+   res.json(profile);
+ });
+ 
++// ─── MES STATISTIQUES ─────────────────────────────────────────────
++// GET /api/profiles/me/stats
++// Défini AVANT /:userId pour éviter que "me" soit capturé comme paramètre
++router.get('/me/stats', authenticate, async (req, res) => {
++  try {
++    const userId = req.user.id;
++
++    const [matchCount, likeCount] = await Promise.all([
++      prisma.match.count({
++        where: {
++          OR: [{ userAId: userId }, { userBId: userId }],
++        },
++      }),
++      prisma.like.count({
++        where: { toUserId: userId }, // champ correct selon le schéma
++      }),
++    ]);
++
++    return res.json({ matches: matchCount, likes: likeCount });
++  } catch (err) {
++    console.error('[Stats] error:', err);
++    return res.status(500).json({ error: 'Erreur serveur' });
++  }
++});
++
+ // ─── VOIR UN PROFIL (par ID) ───────────────────────────────────────
+ // GET /api/profiles/:userId
+ router.get('/:userId', authenticate, async (req, res) => {
+   try {
+-    // Vérifier si bloqué
+     const block = await prisma.block.findFirst({
+       where: {
+         OR: [
+@@ -115,7 +139,7 @@ router.post('/photos', authenticate, async (req, res) => {
+ // PATCH /api/profiles/incognito
+ router.patch('/incognito', authenticate, async (req, res) => {
+   if (req.user.subscription !== 'PREMIUM') {
+-    return res.status(403).json({ error: 'Okoumé Premium requis' });
++    return res.status(403).json({ error: 'Itonda Premium requis' });
+   }
+ 
+   const profile = await prisma.profile.findUnique({ where: { userId: req.user.id } });
+@@ -129,26 +153,5 @@ router.patch('/incognito', authenticate, async (req, res) => {
+   });
+   res.json({ success: true, isIncognito: updated.isIncognito });
+ });
+-// GET /api/profiles/me/stats
+-router.get('/me/stats', authenticate, async (req, res) => {
+-  try {
+-    const userId = req.user.id;
+ 
+-    const [matchCount, likeCount] = await Promise.all([
+-      prisma.match.count({
+-        where: {
+-          OR: [{ userAId: userId }, { userBId: userId }],
+-        },
+-      }),
+-      prisma.like.count({
+-        where: { toUserId: userId },
+-      }),
+-    ]);
+-
+-    return res.json({ matches: matchCount, likes: likeCount });
+-  } catch (err) {
+-    console.error('[Stats] error:', err);
+-    return res.status(500).json({ error: 'Erreur serveur' });
+-  }
+-});
+ module.exports = router;
+diff --git a/src/services/singpay.js b/src/services/singpay.js
+index 81f9bde..56bea39 100644
+--- a/src/services/singpay.js
++++ b/src/services/singpay.js
+@@ -94,10 +94,9 @@ async function verifierStatut(transactionId) {
+   return { paid, data };
+ }
+ 
+-// Plans Okoumé
+ const PLANS = {
+-  plus:    { label: 'Okoumé+',        amount: 5000  },
+-  premium: { label: 'Okoumé Premium', amount: 10000 },
++  plus:    { label: 'Itonda+',        amount: 5000  },
++  premium: { label: 'Itonda Premium', amount: 10000 },
+ };
+ 
+ module.exports = { initierPaiement, verifierStatut, detecterOperateur, PLANS };
+diff --git a/src/services/sms.js b/src/services/sms.js
+index 0b5bc36..2ec776f 100644
+--- a/src/services/sms.js
++++ b/src/services/sms.js
+@@ -26,7 +26,7 @@ async function sendSMS(phone, message) {
+         username: process.env.AT_USERNAME,
+         to:       phone,
+         message,
+-        from:     process.env.AT_SENDER_ID || 'OKOUME',
++        from:     process.env.AT_SENDER_ID || 'ITONDA',
+       }),
+       {
+         headers: {
+-- 
+2.43.0
+

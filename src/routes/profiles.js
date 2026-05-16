@@ -17,12 +17,12 @@ router.post('/',
   authenticate,
   [
     body('name').trim().isLength({ min: 2, max: 50 }),
-body('age').isInt({ min: 18, max: 99 }),
-body('gender').isIn(['HOMME', 'FEMME']),
-body('province').trim().notEmpty(),
-body('city').trim().notEmpty(),
-body('bio').optional().isLength({ max: 500 }),
-body('interests').isArray({ min: 1 }),
+    body('age').isInt({ min: 18, max: 99 }),
+    body('gender').isIn(['HOMME', 'FEMME']),
+    body('province').trim().isIn(PROVINCES).withMessage('Province gabonaise invalide'),
+    body('city').trim().notEmpty(),
+    body('bio').optional().isLength({ max: 280 }),
+    body('interests').isArray({ min: 1 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -52,11 +52,35 @@ router.get('/me', authenticate, async (req, res) => {
   res.json(profile);
 });
 
+// ─── MES STATISTIQUES ─────────────────────────────────────────────
+// GET /api/profiles/me/stats
+// Défini AVANT /:userId pour éviter que "me" soit capturé comme paramètre
+router.get('/me/stats', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const [matchCount, likeCount] = await Promise.all([
+      prisma.match.count({
+        where: {
+          OR: [{ userAId: userId }, { userBId: userId }],
+        },
+      }),
+      prisma.like.count({
+        where: { toUserId: userId }, // champ correct selon le schéma
+      }),
+    ]);
+
+    return res.json({ matches: matchCount, likes: likeCount });
+  } catch (err) {
+    console.error('[Stats] error:', err);
+    return res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // ─── VOIR UN PROFIL (par ID) ───────────────────────────────────────
 // GET /api/profiles/:userId
 router.get('/:userId', authenticate, async (req, res) => {
   try {
-    // Vérifier si bloqué
     const block = await prisma.block.findFirst({
       where: {
         OR: [
@@ -115,7 +139,7 @@ router.post('/photos', authenticate, async (req, res) => {
 // PATCH /api/profiles/incognito
 router.patch('/incognito', authenticate, async (req, res) => {
   if (req.user.subscription !== 'PREMIUM') {
-    return res.status(403).json({ error: 'Okoumé Premium requis' });
+    return res.status(403).json({ error: 'Itonda Premium requis' });
   }
 
   const profile = await prisma.profile.findUnique({ where: { userId: req.user.id } });
@@ -129,26 +153,5 @@ router.patch('/incognito', authenticate, async (req, res) => {
   });
   res.json({ success: true, isIncognito: updated.isIncognito });
 });
-// GET /api/profiles/me/stats
-router.get('/me/stats', authenticate, async (req, res) => {
-  try {
-    const userId = req.user.id;
 
-    const [matchCount, likeCount] = await Promise.all([
-      prisma.match.count({
-        where: {
-          OR: [{ userAId: userId }, { userBId: userId }],
-        },
-      }),
-      prisma.like.count({
-        where: { toUserId: userId },
-      }),
-    ]);
-
-    return res.json({ matches: matchCount, likes: likeCount });
-  } catch (err) {
-    console.error('[Stats] error:', err);
-    return res.status(500).json({ error: 'Erreur serveur' });
-  }
-});
 module.exports = router;

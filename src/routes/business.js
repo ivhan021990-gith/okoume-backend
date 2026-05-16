@@ -1,13 +1,7 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// Itonda — src/routes/business.js
-// Partenaires Itonda Business (restaurants, bars, cafés)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const express    = require('express');
-const router     = express.Router();
-const { PrismaClient } = require('@prisma/client');
-const prisma     = new PrismaClient();
-const { authenticate } = require('../middleware/auth');
+const express  = require('express');
+const router   = express.Router();
+const prisma   = require('../config/prisma');
+const { authenticate, requireAdmin } = require('../middleware/auth');
 
 // GET /api/business — Liste tous les partenaires actifs
 router.get('/', authenticate, async (req, res) => {
@@ -50,7 +44,7 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // POST /api/business — Ajouter un partenaire (admin uniquement)
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, requireAdmin, async (req, res) => {
   try {
     const { nom, type, emoji, quartier, ville, ambiance, promo, prix, heures, categorie, featured } = req.body;
 
@@ -62,15 +56,15 @@ router.post('/', authenticate, async (req, res) => {
       data: {
         nom,
         type,
-        emoji:     emoji    || '🏪',
+        emoji:     emoji     || '🏪',
         quartier,
-        ville:     ville    || 'Libreville',
-        ambiance:  ambiance || '',
-        promo:     promo    || '',
-        prix:      prix     || '💰',
-        heures:    heures   || '',
-        categorie: categorie|| 'restaurant',
-        featured:  featured || false,
+        ville:     ville     || 'Libreville',
+        ambiance:  ambiance  || '',
+        promo:     promo     || '',
+        prix:      prix      || '💰',
+        heures:    heures    || '',
+        categorie: categorie || 'restaurant',
+        featured:  featured  || false,
         actif:     true,
       },
     });
@@ -78,6 +72,36 @@ router.post('/', authenticate, async (req, res) => {
     return res.status(201).json(partenaire);
   } catch (err) {
     console.error('[Business] POST error:', err);
+    return res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PUT /api/business/:id — Modifier un partenaire (admin uniquement)
+router.put('/:id', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { nom, type, emoji, quartier, ville, ambiance, promo, prix, heures, categorie, featured, actif } = req.body;
+
+    const partenaire = await prisma.businessPartner.update({
+      where: { id: req.params.id },
+      data: {
+        ...(nom       !== undefined && { nom }),
+        ...(type      !== undefined && { type }),
+        ...(emoji     !== undefined && { emoji }),
+        ...(quartier  !== undefined && { quartier }),
+        ...(ville     !== undefined && { ville }),
+        ...(ambiance  !== undefined && { ambiance }),
+        ...(promo     !== undefined && { promo }),
+        ...(prix      !== undefined && { prix }),
+        ...(heures    !== undefined && { heures }),
+        ...(categorie !== undefined && { categorie }),
+        ...(featured  !== undefined && { featured }),
+        ...(actif     !== undefined && { actif }),
+      },
+    });
+
+    return res.json(partenaire);
+  } catch (err) {
+    console.error('[Business] PUT error:', err);
     return res.status(500).json({ error: 'Erreur serveur' });
   }
 });

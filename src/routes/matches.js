@@ -7,9 +7,21 @@ const router = express.Router();
 // ─── MES MATCHES ──────────────────────────────────────────────────
 // GET /api/matches
 router.get('/', authenticate, async (req, res) => {
+  const now = new Date();
   const matches = await prisma.match.findMany({
     where: {
-      OR: [{ userAId: req.user.id }, { userBId: req.user.id }],
+      AND: [
+        {
+          OR: [{ userAId: req.user.id }, { userBId: req.user.id }],
+        },
+        {
+          // Inclure seulement les matches non expirés (expiresAt null = permanent)
+          OR: [
+            { expiresAt: null },
+            { expiresAt: { gt: now } },
+          ],
+        },
+      ],
     },
     include: {
       userA: { include: { profile: true } },
