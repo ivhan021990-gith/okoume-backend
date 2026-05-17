@@ -14,6 +14,7 @@ const messageRoutes  = require('./routes/messages');
 const paymentRoutes  = require('./routes/payments');
 const reportRoutes   = require('./routes/reports');
 const businessRoutes = require('./routes/business');
+const uploadRoutes   = require('./routes/upload');
 
 const { socketHandler } = require('./services/socket');
 const { errorHandler }  = require('./middleware/errorHandler');
@@ -46,6 +47,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/reports',  reportRoutes);
 app.use('/api/business', businessRoutes);
+app.use('/api/upload',   uploadRoutes);
 
 // ─── HEALTH CHECK ──────────────────────────────────────────────────
 app.get('/health', (req, res) => {
