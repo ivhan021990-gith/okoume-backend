@@ -153,6 +153,7 @@ router.get('/me', authenticate, async (req, res) => {
     phone:        req.user.phone,
     subscription: req.user.subscription,
     isVerified:   req.user.isVerified,
+    isAdmin:      req.user.isAdmin,
     profile:      req.user.profile,
     createdAt:    req.user.createdAt,
   });

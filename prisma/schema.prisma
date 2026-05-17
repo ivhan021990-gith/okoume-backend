@@ -20,6 +20,7 @@ model User {
   isActive    Boolean  @default(true)
   isBanned    Boolean  @default(false)
   isVerified  Boolean  @default(false)   // selfie vérifié
+  isAdmin     Boolean  @default(false)   // compte administrateur
   subscription Subscription @default(FREE)
 
   // Profil
