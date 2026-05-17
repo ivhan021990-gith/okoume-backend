@@ -46,11 +46,11 @@ async function getHeaders() {
 // Airtel = 07x → route /74/paiement
 // Moov   = 06x → route /62/paiement
 function detecterOperateur(phone) {
-  const numero = phone.replace(/\D/g, '').replace(/^241/, '');
-  if (numero.startsWith('07') || numero.startsWith('7')) {
+  const numero = '0' + phone.replace(/\D/g, '').replace(/^241/, '');
+  if (numero.startsWith('07')) {
     return { operateur: 'AIRTEL_MONEY', route: '/74/paiement' };
   }
-  if (numero.startsWith('06') || numero.startsWith('6')) {
+  if (numero.startsWith('06')) {
     return { operateur: 'MOOV_MONEY', route: '/62/paiement' };
   }
   return null;
@@ -62,7 +62,7 @@ async function initierPaiement({ transactionId, montant, phone, description }) {
   if (!info) throw new Error('Numéro invalide. Doit être Airtel (07x) ou Moov (06x)');
 
   const headers    = await getHeaders();
-  const numeroLocal = phone.replace(/\D/g, '').replace(/^241/, '');
+  const numeroLocal = '0' + phone.replace(/\D/g, '').replace(/^241/, '');
 
   const payload = {
     reference:    transactionId,
