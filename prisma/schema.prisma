@@ -162,7 +162,7 @@ enum MessageType {
 model Payment {
   id           String        @id @default(uuid())
   userId       String
-  user         User          @relation(fields: [userId], references: [id])
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   amount       Int           // En FCFA
   subscription Subscription
   provider     PayProvider
